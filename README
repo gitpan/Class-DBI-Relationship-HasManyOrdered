@@ -1,5 +1,5 @@
-Class-DBI-Relationship-HasManyOrdered version 0.01
-==================================================
+Class-DBI-Relationship-HasManyOrdered
+=====================================
 
 Class::DBI::Relationship::HasManyOrdered Provides an ordered 'Has Many' relationship between Class::DBI classes.
 This relationship enhances the HasMany relationship already provided in Class::DBI to allow you to quickly and

@@ -3,7 +3,7 @@ package Class::DBI::Relationship::HasManyOrdered;
 use strict;
 use warnings;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 use base qw(Class::DBI::Relationship::HasMany);
 
@@ -18,9 +18,11 @@ sub methods {
 	    "${accessor}_asIndex" => $self->_has_many_ordered_asindex_method,
 	    "append_to_$accessor" => $self->_method_insert('append'),
 	    "prepend_to_$accessor" => $self->_method_insert('prepend'),
+	    "append_$accessor" => $self->_method_insert('append'),
+	    "prepend_$accessor" => $self->_method_insert('prepend'),
 	    "insert_$accessor" => $self->_method_insert,
 	    "delete_$accessor" => $self->_method_delete,
-#	    "replace_$accessor" => $self->_method_replace,
+	    "replace_$accessor" => $self->_method_replace,
 	   );
 }
 
@@ -30,7 +32,7 @@ sub triggers {
 	return (
 		before_delete => sub {
 		    my $self = shift;
-		    my $meta = $self->class->meta_info(has_many => $accessor);
+		    my $meta = ref($self)->meta_info(has_many => $accessor);
 		    my ($f_class, $f_key, $args) =
 			($meta->foreign_class, $meta->args->{foreign_key}, $meta->args);
 		    if ($meta->args->{map}) {
@@ -63,9 +65,7 @@ sub _method_insert {
 	my $meta = $class->meta_info(has_many_ordered => $accessor);
 	my $order_column = $meta->args->{order_by};
 	my $pk = $self->columns('Primary');
-	my ($f_class, $f_key, $args) =
-	    ($meta->foreign_class, $meta->args->{foreign_key}, $meta->args);
-	my $f_pk = $f_class->columns('Primary');
+	my ($f_class, $f_key) = ($meta->foreign_class, $meta->foreign_class->columns('Primary'));
 
 	if ($mode eq 'append') {
 	    my $sql = ($meta->args->{map}) ? "select max($order_column) + 1 from ".$meta->args->{map} ." where $pk = ?" : "select max($order_column) + 1 from ".$self->table." where $f_key = ?";
@@ -94,6 +94,7 @@ sub _method_insert {
 		$f_object_id = $f_object->id;
 	    } else { # data is object id
 		if (ref $data) { # check is scalar
+		    warn "got ",ref $data," expected $f_class \n";
 		    die "$methodname requires one or more valid object ids, objects, or hashes - got an unexpected reference";
 		}
  		$data =~ s/\s//g;
@@ -112,7 +113,7 @@ sub _method_insert {
 		}
 
 		# insert new side-table entry
-		my $sth = $self->db_Main->prepare("insert into $maptable ($pk, $f_pk, $orderby) values ( ?, ?, ? )");
+		my $sth = $self->db_Main->prepare("insert into $maptable ($pk, $f_key, $orderby) values ( ?, ?, ? )");
 		my $rv = $sth->execute($self->id, $f_object_id ,$position);
 	    } else {
 		unless ($mode eq 'append') {
@@ -134,54 +135,90 @@ sub _method_insert {
 
 sub _method_delete {
     my $self = shift;
-    my $mode = shift;
     my $accessor = $self->accessor;
     my $methodname = "delete_$accessor";
     return sub {
-	my ($self, $data) = @_;
+	my ($self, @args) = @_;
 	my $class = ref $self
 	    or return $self->_croak("$methodname called as class method");
 	return $self->_croak("$methodname needs position or objects")
-	    unless defined $data;
+	    unless defined $args[0];
 	my $meta = $class->meta_info(has_many_ordered => $accessor);
 	my $pk = $self->columns('Primary');
-	my ($f_class, $f_key, $args) =
-	    ($meta->foreign_class, $meta->args->{foreign_key}, $meta->args);
-	my $f_pk = $f_class->columns('Primary');
+	my ($f_class, $f_key) = ($meta->foreign_class, $meta->foreign_class->columns('Primary'));
+	my $fclass_table = $f_class->table;
 
-	# data must be one of string (must be id) or object or array of either
-	my @objects = ((ref $data eq 'ARRAY') ? @$data : $data);
-	foreach my $data (@objects) {
-	    if (ref $data eq $f_class) { # is object of foreign class
-		if ($meta->args->{map}) { # check if using mapping table
-		    my $sth = $self->db_Main->prepare("delete from ".$meta->args->{map}." where $pk = ? and $f_pk = ?");
-		    my $rv = $sth->execute($self->id, $data->id);
-		} else {
-		    $data->{$f_key} = $self->id; # FIXME: may not work for inherited relationships
-		    $data->delete();
-		}
-	    } else { # is object id
-		if (ref $data) { # check is scalar
-		    die "$methodname requires one or more valid object ids, objects, or hashes - got an unexpected reference";
-		}
-
-		if ($data =~ /\D/) { # check is numeric
-		    die "$methodname requires one or more valid object ids, objects, or hashes - got an unexpected value";
-		}
-
-		if ($meta->args->{map}) { # check if using mapping table
-		    my $sth = $self->db_Main->prepare("delete from ".$meta->args->{map}." where $pk = ? and $f_pk = ?");
-		    my $rv = $sth->execute($self->id, $data);
-		} else {
-		    my $f_object = $f_class->retrieve($data);
-		    unless ($f_object) {
-			die "$data is not a valid id for ".$f_class->table." in $methodname\n";
+	if ($args[0] =~ /object/) {
+	    # data must be one of string (must be id) or object or array of either
+	    my $data = $args[1];
+	    my @objects = ((ref $data eq 'ARRAY') ? @$data : $data);
+	    foreach my $data (@objects) {
+		if (ref $data eq $f_class) { # is object of foreign class
+		    if ($meta->args->{map}) { # check if using mapping table
+			my $sth = $self->db_Main->prepare("delete from ".$meta->args->{map}." where $pk = ? and $f_key = ?");
+			my $rv = $sth->execute($self->id, $data->id);
+		    } else {
+			$data->{$f_key} = $self->id; # FIXME: may not work for inherited relationships
+			$data->delete();
 		    }
-		    $f_object->{$f_key} = $self->id; # FIXME: may not work for inherited relationships
+		} else {	# is object id
+		    if (ref $data) { # check is scalar
+			die "$methodname requires one or more valid object ids, objects, or hashes - got an unexpected reference";
+		    }
+
+		    if ($data =~ /\D/) { # check is numeric
+			die "$methodname requires one or more valid object ids, objects, or hashes - got an unexpected value";
+		    }
+
+		    if ($meta->args->{map}) { # check if using mapping table
+			my $sth = $self->db_Main->prepare("delete from ".$meta->args->{map}." where $pk = ? and $f_key = ?");
+			my $rv = $sth->execute($self->id, $data);
+		    } else {
+			my $f_object = $f_class->retrieve($data);
+			unless ($f_object) {
+			    die "$data is not a valid id for ".$f_class->table." in $methodname\n";
+			}
+			$f_object->delete();
+		    }
+		}
+	    }
+	} else {
+	    my @elements = ((ref $args[0] eq 'ARRAY') ? @{$args[0]} : @args);
+	    my $placeholder = join(',',map( '?',@elements));
+	    my $orderby = $meta->args->{order_by};
+	    if ($meta->args->{map}) { # check if using mapping table
+		my $sth = $self->db_Main->prepare("delete from ".$meta->args->{map}." where $pk = ? and $orderby IN ($placeholder)");
+		my $rv = $sth->execute($self->id, @elements);
+	    } else {
+		my $query = "select $f_key as PK from $fclass_table where $pk = ? and $orderby in ($placeholder)";
+		my $sth = $self->db_Main->prepare($query);
+		my $rv = $sth->execute(@elements);
+		my @ids = keys %{$sth->fetchall_hashref( 'PK' )};
+		foreach (@ids) {
+		    my $f_object = $f_class->retrieve($_);
 		    $f_object->delete();
 		}
 	    }
 	}
+    };
+}
+
+sub _method_replace {
+    my $self = shift;
+    my $accessor = $self->accessor;
+    my $methodname = "replace_$accessor";
+    my $deletemethod = "delete_$accessor";
+    my $insertmethod = "insert_$accessor";
+    return sub {
+	my ($self, $data) = @_;
+	my $class = ref $self
+	    or return $self->_croak("$methodname called as class method");
+	return $self->_croak("$methodname needs objects or id's")
+	    unless defined $data;
+	# remove current object
+	$self->$deletemethod($self->$accessor);
+	# insert new objects
+	return $self->$insertmethod($data);
     };
 }
 
@@ -190,10 +227,9 @@ sub _has_many_ordered_asindex_method {
     my $accessor = $self->accessor;
     return sub {
 	my ($self,$id_field,$title_field) = @_;
-	my $meta = $self->class->meta_info(has_many_ordered => $accessor);
+	my $meta = ref($self)->meta_info(has_many_ordered => $accessor);
 	my $pk = $self->columns('Primary');
-	my ($f_class, $f_key, $args) =
-	    ($meta->foreign_class, $meta->args->{foreign_key}, $meta->args);
+	my ($f_class, $f_key) = ($meta->foreign_class, $meta->foreign_class->columns('Primary'));
 	$id_field ||=  $f_key;
 	if (ref $self) {
 	    $title_field ||= $self->{"_${accessor}_index"} ||
@@ -224,21 +260,20 @@ sub _has_many_ordered_method {
     my $accessor = $self->accessor;
     return sub {
 	my ($self,$key,$value) = @_;
-	my $meta = $self->class->meta_info(has_many_ordered => $accessor);
+	my $meta = ref($self)->meta_info(has_many_ordered => $accessor);
 	my $pk = $self->columns('Primary');
-	my ($f_class, $f_key, $args) =
-	    ($meta->foreign_class, $meta->args->{foreign_key}, $meta->args);
+	my ($f_class, $f_key) = ($meta->foreign_class, $meta->foreign_class->columns('Primary'));
 	my $maptable = $meta->args->{map};
 	my $orderby = $meta->args->{order_by};
 
 	if ($maptable) {
-	    my @columns = $f_class->_essential;
 	    my $f_table = $f_class->table;
-	    my $query = 'SELECT '. join(', ',@columns). " FROM $maptable, $f_table WHERE " .
-		"${maptable}.$f_key = ${f_table}.$f_key and ${maptable}.$pk = ? order by $orderby";
+	    my @columns = ( $f_class->columns('Essential') ) ? $f_class->columns('Essential') : $f_class->columns('All');
+	    my $query = 'SELECT '. join(', ',map { s/$f_key/$f_table.$f_key/i; $_; } @columns). " FROM $maptable, $f_table WHERE " .
+		"${maptable}.$f_key = ${f_table}.$f_key and ${maptable}.$pk = ? order by ${maptable}.$orderby";
 	    my $sth = $self->db_Main->prepare($query);
 	    my $rv = $sth->execute($self->id);
-	    return $self->class->sth_to_objects($sth);
+	    return ref($self)->sth_to_objects($sth);
 	} else {
 	    my @args = ($f_key => $self->id);
 	    if ($key && defined $value) {
@@ -251,7 +286,7 @@ sub _has_many_ordered_method {
     };
 }
 
-
+#
 
 1;
 
