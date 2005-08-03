@@ -3,7 +3,7 @@ package Class::DBI::Relationship::HasManyOrdered;
 use strict;
 use warnings;
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 use base qw(Class::DBI::Relationship::HasMany);
 
@@ -271,9 +271,9 @@ sub _has_many_ordered_method {
 	    my @columns = ( $f_class->columns('Essential') ) ? $f_class->columns('Essential') : $f_class->columns('All');
 	    my $query = 'SELECT '. join(', ',map { s/$f_key/$f_table.$f_key/i; $_; } @columns). " FROM $maptable, $f_table WHERE " .
 		"${maptable}.$f_key = ${f_table}.$f_key and ${maptable}.$pk = ? order by ${maptable}.$orderby";
-	    my $sth = $self->db_Main->prepare($query);
+	    my $sth = $f_class->db_Main->prepare($query);
 	    my $rv = $sth->execute($self->id);
-	    return ref($self)->sth_to_objects($sth);
+	    return $f_class->sth_to_objects($sth);
 	} else {
 	    my @args = ($f_key => $self->id);
 	    if ($key && defined $value) {
@@ -303,7 +303,7 @@ In your classes:
  package ContentManager::DBI;
  use base 'Class::DBI';
 
- Music::DBI->connection('dbi:mysql:dbname', 'username', 'password');
+ ContentManager::DBI->connection('dbi:mysql:dbname', 'username', 'password');
  __PACKAGE__->add_relationship_type(has_many_ordered => 'Class::DBI::Relationship::IsA');
 
  ...
@@ -357,6 +357,16 @@ easily deal with ordered 'One to Many' or 'Many to Many' relationships without a
 preserving as much of the original behaviour and syntax as possible.
 
 For more information See Class::DBI and Class::DBI::Relationship.
+
+
+=head1 CLASS METHODS
+
+=head1 has_many_ordered
+
+Page->has_many_ordered(paragraphs => Paragraphs => {sort => 'position', map => 'PageParagraphs'});
+
+has_many_ordered is a class method which takes the accessor name, followed by the foreign class name, and a hashref of arguments.
+the hashref arguments self explainatory but the map argument refers to the mapping table rather than class, this differs from standard C::DBI practice but avoids the necessity of having a joining class where you would have to specify the tablename anyway
 
 =head2 EXPORT
 
